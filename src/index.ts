@@ -359,6 +359,12 @@ const UpdateNotesInputSchema = z.object({
     .describe("The new notes content (supports Markdown formatting), or null to clear. The app renders notes using Markdown.")
 }).strict();
 
+const GetNotesInputSchema = z.object({
+  item_id: z.string()
+    .min(1)
+    .describe("The ID of the item whose notes to retrieve. Example: '2EADCE4C-538A-444F-BE61-B4AF0047B2EC'")
+}).strict();
+
 const GetDeferredTasksInputSchema = z.object({
   parent_id: z.string()
     .optional()
@@ -4435,6 +4441,90 @@ Notes successfully ${params.notes ? 'updated' : 'cleared'}.`;
         content: [{
           type: "text",
           text: result
+        }]
+      };
+
+    } catch (error) {
+      return {
+        content: [{
+          type: "text",
+          text: handleDatabaseError(error)
+        }],
+        isError: true
+      };
+    } finally {
+      if (db) {
+        try {
+          db.close();
+        } catch {
+          // Ignore errors on close
+        }
+      }
+    }
+  }
+);
+
+// Register the get_notes tool
+server.registerTool(
+  "directgtd_get_notes",
+  {
+    title: "Get Item Notes",
+    description: `Get the notes field for an item.
+
+This tool retrieves just the notes/description for a specific item. Returns the raw notes content.
+
+Args:
+  - item_id (string, required): The item ID. Example: '2EADCE4C-538A-444F-BE61-B4AF0047B2EC'
+
+Returns:
+  The item's notes content, or a message if no notes exist.
+
+Examples:
+  - Use when: "Get the notes for this task"
+  - Use when: "Show me the description of this item"
+  - Use when: "What are the notes on this?"
+
+Error Handling:
+  - Returns error if item_id doesn't exist`,
+    inputSchema: GetNotesInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async (params: { item_id: string }) => {
+    let db: Database.Database | null = null;
+
+    try {
+      db = openDatabase();
+
+      const item = db.prepare("SELECT id, title, notes FROM items WHERE id = ? AND deleted_at IS NULL").get(params.item_id) as { id: string; title: string; notes: string | null } | undefined;
+
+      if (!item) {
+        return {
+          content: [{
+            type: "text",
+            text: `Error: No item found with ID: ${params.item_id}`
+          }],
+          isError: true
+        };
+      }
+
+      if (!item.notes) {
+        return {
+          content: [{
+            type: "text",
+            text: `No notes for "${item.title}" (${item.id})`
+          }]
+        };
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: item.notes
         }]
       };
 
