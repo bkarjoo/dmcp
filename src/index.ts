@@ -1207,13 +1207,14 @@ Error Handling:
         dueDateTimestamp = Math.floor(new Date(params.due_date).getTime() / 1000);
       }
 
-      // Insert new item
+      // Insert new item with CloudKit record name for sync
+      const ckRecordName = `Item_${itemId}`;
       const insertStmt = db.prepare(`
         INSERT INTO items (
           id, title, parent_id, sort_order,
           created_at, modified_at, item_type,
-          due_date, completed_at, earliest_start_time, needs_push
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          due_date, completed_at, earliest_start_time, ck_record_name, needs_push
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `);
 
       insertStmt.run(
@@ -1226,7 +1227,8 @@ Error Handling:
         params.item_type || "Task",
         dueDateTimestamp,
         null,
-        null
+        null,
+        ckRecordName
       );
 
       // Fetch the created item
@@ -1349,13 +1351,14 @@ Error Handling:
         earliestStartTimestamp = Math.floor(new Date(params.earliest_start_time).getTime() / 1000);
       }
 
-      // Insert new item
+      // Insert new item with CloudKit record name for sync
+      const ckRecordName = `Item_${itemId}`;
       const insertStmt = db.prepare(`
         INSERT INTO items (
           id, title, parent_id, sort_order,
           created_at, modified_at, item_type,
-          due_date, completed_at, earliest_start_time, needs_push
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          due_date, completed_at, earliest_start_time, ck_record_name, needs_push
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `);
 
       insertStmt.run(
@@ -1368,7 +1371,8 @@ Error Handling:
         params.item_type || "Task",
         dueDateTimestamp,
         null,
-        earliestStartTimestamp
+        earliestStartTimestamp,
+        ckRecordName
       );
 
       // Fetch the created item
@@ -1479,13 +1483,14 @@ Error Handling:
         earliestStartTimestamp = Math.floor(new Date(params.earliest_start_time).getTime() / 1000);
       }
 
-      // Insert new item with NULL parent_id
+      // Insert new item with NULL parent_id and CloudKit record name for sync
+      const ckRecordName = `Item_${itemId}`;
       const insertStmt = db.prepare(`
         INSERT INTO items (
           id, title, parent_id, sort_order,
           created_at, modified_at, item_type,
-          due_date, completed_at, earliest_start_time, needs_push
-        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 1)
+          due_date, completed_at, earliest_start_time, ck_record_name, needs_push
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `);
 
       insertStmt.run(
@@ -1497,7 +1502,8 @@ Error Handling:
         params.item_type || "Folder",
         dueDateTimestamp,
         null,
-        earliestStartTimestamp
+        earliestStartTimestamp,
+        ckRecordName
       );
 
       // Fetch the created item
@@ -2744,10 +2750,11 @@ No changes made.`
         };
       }
 
-      // Add the tag
+      // Add the tag with CloudKit record name for sync
       const tagNow = Math.floor(Date.now() / 1000);
-      db.prepare("INSERT INTO item_tags (item_id, tag_id, created_at, modified_at, needs_push) VALUES (?, ?, ?, ?, 1)")
-        .run(params.item_id, params.tag_id, tagNow, tagNow);
+      const itemTagCkRecordName = `ItemTag_${params.item_id}_${params.tag_id}`;
+      db.prepare("INSERT INTO item_tags (item_id, tag_id, created_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, 1)")
+        .run(params.item_id, params.tag_id, tagNow, tagNow, itemTagCkRecordName);
 
       // Update modified_at for the item
       const modifiedAt = Math.floor(Date.now() / 1000);
@@ -5336,13 +5343,14 @@ Error Handling:
         };
       }
 
-      // Create new time entry
+      // Create new time entry with CloudKit record name for sync
       const entryId = crypto.randomUUID().toUpperCase();
+      const ckRecordName = `TimeEntry_${entryId}`;
       const now = Math.floor(Date.now() / 1000);
 
       db.prepare(
-        "INSERT INTO time_entries (id, item_id, started_at, modified_at, needs_push) VALUES (?, ?, ?, ?, 1)"
-      ).run(entryId, params.item_id, now, now);
+        "INSERT INTO time_entries (id, item_id, started_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, 1)"
+      ).run(entryId, params.item_id, now, now, ckRecordName);
 
       const startTime = new Date(now * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
 
@@ -6057,12 +6065,13 @@ Error Handling:
       // Generate random color if not provided
       const color = params.color ?? `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0').toUpperCase()}`;
 
-      // Create tag
+      // Create tag with CloudKit record name for sync
       const tagId = crypto.randomUUID().toUpperCase();
+      const ckRecordName = `Tag_${tagId}`;
       const now = Math.floor(Date.now() / 1000);
       db.prepare(
-        "INSERT INTO tags (id, name, color, created_at, modified_at, needs_push) VALUES (?, ?, ?, ?, ?, 1)"
-      ).run(tagId, params.name, color, now, now);
+        "INSERT INTO tags (id, name, color, created_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, ?, 1)"
+      ).run(tagId, params.name, color, now, now, ckRecordName);
 
       return {
         content: [{
@@ -6910,12 +6919,13 @@ Error Handling:
       const rootId = generateUUID();
       idMap.set(params.template_id, rootId);
 
+      const ckRecordName = `Item_${rootId}`;
       const insertStmt = db.prepare(`
         INSERT INTO items (
           id, title, parent_id, sort_order,
           created_at, modified_at, item_type,
-          due_date, completed_at, earliest_start_time, notes, needs_push
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+          due_date, completed_at, earliest_start_time, notes, ck_record_name, needs_push
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `);
 
       insertStmt.run(
@@ -6929,7 +6939,8 @@ Error Handling:
         null,
         null,
         null,
-        template.notes
+        template.notes,
+        ckRecordName
       );
 
       // Copy tags from template to root
@@ -6937,9 +6948,10 @@ Error Handling:
         "SELECT tag_id FROM item_tags WHERE item_id = ?"
       ).all(params.template_id) as { tag_id: string }[];
 
-      const insertTagStmt = db.prepare("INSERT INTO item_tags (item_id, tag_id, created_at, modified_at, needs_push) VALUES (?, ?, ?, ?, 1)");
+      const insertTagStmt = db.prepare("INSERT INTO item_tags (item_id, tag_id, created_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, 1)");
       for (const tag of templateTags) {
-        insertTagStmt.run(rootId, tag.tag_id, now, now);
+        const tagCkRecordName = `ItemTag_${rootId}_${tag.tag_id}`;
+        insertTagStmt.run(rootId, tag.tag_id, now, now, tagCkRecordName);
       }
 
       // Recursively copy all children
@@ -6954,6 +6966,7 @@ Error Handling:
 
           // Determine item type - keep original type for children (Task, Note, etc.)
           const childType = child.item_type === "Template" ? "Folder" : child.item_type;
+          const childCkRecordName = `Item_${newChildId}`;
 
           insertStmt.run(
             newChildId,
@@ -6966,7 +6979,8 @@ Error Handling:
             child.due_date,
             null, // Don't copy completed_at
             child.earliest_start_time,
-            child.notes
+            child.notes,
+            childCkRecordName
           );
 
           // Copy tags
@@ -6975,7 +6989,8 @@ Error Handling:
           ).all(child.id) as { tag_id: string }[];
 
           for (const tag of childTags) {
-            insertTagStmt.run(newChildId, tag.tag_id, now, now);
+            const childTagCkRecordName = `ItemTag_${newChildId}_${tag.tag_id}`;
+            insertTagStmt.run(newChildId, tag.tag_id, now, now, childTagCkRecordName);
           }
 
           // Recursively copy this child's children
