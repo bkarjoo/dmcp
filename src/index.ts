@@ -942,22 +942,51 @@ Error Handling:
     }
   },
   async (params: { response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
       // Apply default for response_format
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
 
-      // Open database
-      db = openDatabase();
+      // Use HTTP API to get root items
+      const response = await fetch("http://localhost:9876/root-items");
 
-      // Query for root items
-      const query = "SELECT * FROM items WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY sort_order";
-      const stmt = db.prepare(query);
-      const rows = stmt.all() as DirectGTDItem[];
+      if (!response.ok) {
+        const errorData = await response.json() as { error?: string };
+        return {
+          content: [{
+            type: "text",
+            text: `Error: ${errorData.error || 'Failed to get root items'}`
+          }],
+          isError: true
+        };
+      }
 
-      // Format items
-      const items = rows.map(formatItem);
+      const data = await response.json() as { items: Array<{
+        id: string;
+        title?: string;
+        parentId?: string | null;
+        sortOrder?: number;
+        createdAt?: number;
+        modifiedAt?: number;
+        completedAt?: number | null;
+        dueDate?: number | null;
+        earliestStartTime?: number | null;
+        itemType?: string;
+        notes?: string | null;
+      }> };
+
+      // Convert API response to FormattedItem format
+      const items: FormattedItem[] = data.items.map(item => ({
+        id: item.id,
+        title: item.title || "",
+        parentId: item.parentId || null,
+        sortOrder: item.sortOrder || 0,
+        createdAt: item.createdAt ? new Date(item.createdAt * 1000).toISOString() : "",
+        modifiedAt: item.modifiedAt ? new Date(item.modifiedAt * 1000).toISOString() : "",
+        completedAt: item.completedAt ? new Date(item.completedAt * 1000).toISOString() : null,
+        dueDate: item.dueDate ? new Date(item.dueDate * 1000).toISOString() : null,
+        earliestStartTime: item.earliestStartTime ? new Date(item.earliestStartTime * 1000).toISOString() : null,
+        notes: item.notes || null
+      }));
 
       // Format response based on requested format
       let result: string;
@@ -995,22 +1024,14 @@ Error Handling:
       };
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [{
           type: "text",
-          text: handleDatabaseError(error)
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
-    } finally {
-      // Clean up database connection
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -1074,23 +1095,52 @@ Error Handling:
     }
   },
   async (params: { parent_id: string; response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
       // Apply default for response_format
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
       const parentId = params.parent_id;
 
-      // Open database
-      db = openDatabase();
+      // Use HTTP API to get children
+      const response = await fetch(`http://localhost:9876/items/${parentId}/children`);
 
-      // Query for child items
-      const query = "SELECT * FROM items WHERE parent_id = ? AND deleted_at IS NULL ORDER BY sort_order";
-      const stmt = db.prepare(query);
-      const rows = stmt.all(parentId) as DirectGTDItem[];
+      if (!response.ok) {
+        const errorData = await response.json() as { error?: string };
+        return {
+          content: [{
+            type: "text",
+            text: `Error: ${errorData.error || 'Failed to get children'}`
+          }],
+          isError: true
+        };
+      }
 
-      // Format items
-      const items = rows.map(formatItem);
+      const data = await response.json() as { items: Array<{
+        id: string;
+        title?: string;
+        parentId?: string | null;
+        sortOrder?: number;
+        createdAt?: number;
+        modifiedAt?: number;
+        completedAt?: number | null;
+        dueDate?: number | null;
+        earliestStartTime?: number | null;
+        itemType?: string;
+        notes?: string | null;
+      }> };
+
+      // Convert API response to FormattedItem format
+      const items: FormattedItem[] = data.items.map(item => ({
+        id: item.id,
+        title: item.title || "",
+        parentId: item.parentId || null,
+        sortOrder: item.sortOrder || 0,
+        createdAt: item.createdAt ? new Date(item.createdAt * 1000).toISOString() : "",
+        modifiedAt: item.modifiedAt ? new Date(item.modifiedAt * 1000).toISOString() : "",
+        completedAt: item.completedAt ? new Date(item.completedAt * 1000).toISOString() : null,
+        dueDate: item.dueDate ? new Date(item.dueDate * 1000).toISOString() : null,
+        earliestStartTime: item.earliestStartTime ? new Date(item.earliestStartTime * 1000).toISOString() : null,
+        notes: item.notes || null
+      }));
 
       // Format response based on requested format
       let result: string;
@@ -1129,22 +1179,14 @@ Error Handling:
       };
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [{
           type: "text",
-          text: handleDatabaseError(error)
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
-    } finally {
-      // Clean up database connection
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -1313,85 +1355,83 @@ Error Handling:
     }
   },
   async (params: { title: string; parent_id: string; item_type?: string; due_date?: string; earliest_start_time?: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
+      // Build request body for API
+      const body: Record<string, unknown> = {
+        title: params.title,
+        parentId: params.parent_id,
+        itemType: (params.item_type || "Task").toLowerCase()
+      };
 
-      // Verify parent exists
-      const parent = db.prepare("SELECT * FROM items WHERE id = ?").get(params.parent_id) as DirectGTDItem | undefined;
-      if (!parent) {
+      // Use HTTP API to create item
+      const response = await fetch("http://localhost:9876/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+
+      const data = await response.json() as { item?: { id: string; title?: string; parentId?: string; sortOrder?: number; createdAt?: number; itemType?: string }; error?: string };
+
+      if (!response.ok) {
         return {
           content: [{
             type: "text",
-            text: `Error: No parent found with ID: ${params.parent_id}`
+            text: `Error: ${data.error || 'Failed to create item'}`
           }],
           isError: true
         };
       }
 
-      // Generate new item ID
-      const itemId = generateUUID();
-
-      // Get next sort order
-      const sortOrder = getNextSortOrder(db, params.parent_id);
-
-      // Get current timestamp (Unix timestamp in seconds)
-      const now = Math.floor(Date.now() / 1000);
-
-      // Parse due date if provided
-      let dueDateTimestamp: number | null = null;
-      if (params.due_date) {
-        dueDateTimestamp = Math.floor(new Date(params.due_date).getTime() / 1000);
+      const item = data.item;
+      if (!item) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: No item returned from API"
+          }],
+          isError: true
+        };
       }
 
-      // Parse earliest start time if provided
-      let earliestStartTimestamp: number | null = null;
-      if (params.earliest_start_time) {
-        earliestStartTimestamp = Math.floor(new Date(params.earliest_start_time).getTime() / 1000);
+      // Get parent name from database for display
+      let parentName = params.parent_id;
+      let db: Database.Database | null = null;
+      try {
+        db = openDatabase();
+        const parent = db.prepare("SELECT title FROM items WHERE id = ?").get(params.parent_id) as { title: string } | undefined;
+        if (parent) parentName = parent.title;
+      } catch { /* ignore */ }
+      finally { if (db) try { db.close(); } catch { /* ignore */ } }
+
+      // If due_date or earliest_start_time provided, update via PUT (API POST doesn't support these)
+      if (params.due_date || params.earliest_start_time) {
+        const updateBody: Record<string, unknown> = {};
+        if (params.due_date) {
+          updateBody.dueDate = Math.floor(new Date(params.due_date).getTime() / 1000);
+        }
+        if (params.earliest_start_time) {
+          updateBody.earliestStartTime = Math.floor(new Date(params.earliest_start_time).getTime() / 1000);
+        }
+        await fetch(`http://localhost:9876/items/${item.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updateBody)
+        });
       }
-
-      // Insert new item with CloudKit record name for sync
-      const ckRecordName = `Item_${itemId}`;
-      const insertStmt = db.prepare(`
-        INSERT INTO items (
-          id, title, parent_id, sort_order,
-          created_at, modified_at, item_type,
-          due_date, completed_at, earliest_start_time, ck_record_name, needs_push
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-      `);
-
-      insertStmt.run(
-        itemId,
-        params.title,
-        params.parent_id,
-        sortOrder,
-        now,
-        now,
-        params.item_type || "Task",
-        dueDateTimestamp,
-        null,
-        earliestStartTimestamp,
-        ckRecordName
-      );
-
-      // Fetch the created item
-      const createdItem = db.prepare("SELECT * FROM items WHERE id = ?").get(itemId) as DirectGTDItem;
-      const formattedItem = formatItem(createdItem);
 
       const result = `# Item Created
 
-**${formattedItem.title}**
+**${item.title}**
 
-- **ID**: ${formattedItem.id}
+- **ID**: ${item.id}
 - **Type**: ${params.item_type || "Task"}
-- **Parent**: ${params.parent_id} (${parent.title})
-- **Sort Order**: ${formattedItem.sortOrder}
-- **Created**: ${formatDate(formattedItem.createdAt)}
-${params.due_date ? `- **Due Date**: ${formatDate(formattedItem.dueDate)}` : ''}
-${params.earliest_start_time ? `- **Earliest Start**: ${formatDate(formattedItem.earliestStartTime)}` : ''}
+- **Parent**: ${params.parent_id} (${parentName})
+- **Sort Order**: ${item.sortOrder}
+- **Created**: ${item.createdAt ? formatDate(new Date(item.createdAt * 1000).toISOString()) : 'Now'}
+${params.due_date ? `- **Due Date**: ${formatDate(params.due_date)}` : ''}
+${params.earliest_start_time ? `- **Earliest Start**: ${formatDate(params.earliest_start_time)}` : ''}
 
-Item successfully created in "${parent.title}".`;
+Item successfully created in "${parentName}".`;
 
       return {
         content: [{
@@ -1401,21 +1441,14 @@ Item successfully created in "${parent.title}".`;
       };
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [{
           type: "text",
-          text: handleDatabaseError(error)
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -1584,64 +1617,71 @@ Error Handling:
     }
   },
   async (params: { task_id: string; completed?: boolean }) => {
-    let db: Database.Database | null = null;
-
     try {
-      // Open database
-      db = openDatabase();
+      const shouldComplete = params.completed ?? true;
 
-      // Check if item exists and get its type
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.task_id) as DirectGTDItem | undefined;
-
-      if (!item) {
+      // First get current item state via API
+      const getResponse = await fetch(`http://localhost:9876/items/${params.task_id}`);
+      if (!getResponse.ok) {
+        const errorData = await getResponse.json() as { error?: string };
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.task_id}`
+            text: `Error: ${errorData.error || 'Item not found'}`
           }],
           isError: true
         };
       }
+
+      const getData = await getResponse.json() as { item: { id: string; title?: string; itemType?: string; completedAt?: number | null; modifiedAt?: number } };
+      const currentItem = getData.item;
 
       // Validate that the item is a Task
-      if (item.item_type !== "Task") {
+      if (currentItem.itemType !== "Task") {
         return {
           content: [{
             type: "text",
-            text: `Error: Cannot complete item of type '${item.item_type}'. Only Tasks can be marked as completed. This item is a ${item.item_type}.`
+            text: `Error: Cannot complete item of type '${currentItem.itemType}'. Only Tasks can be marked as completed. This item is a ${currentItem.itemType}.`
           }],
           isError: true
         };
       }
 
-      // Determine completion timestamp
-      const shouldComplete = params.completed ?? true;
-      const completedAt = shouldComplete ? Math.floor(Date.now() / 1000) : null;
-      const modifiedAt = Math.floor(Date.now() / 1000);
+      // Check if we need to toggle (API toggles, so only call if state differs)
+      const isCurrentlyCompleted = currentItem.completedAt != null;
+      if (isCurrentlyCompleted !== shouldComplete) {
+        // Toggle completion via API
+        const toggleResponse = await fetch(`http://localhost:9876/items/${params.task_id}/complete`, {
+          method: "POST"
+        });
 
-      // Update the task
-      const updateStmt = db.prepare(`
-        UPDATE items
-        SET completed_at = ?, modified_at = ?, needs_push = 1
-        WHERE id = ?
-      `);
+        if (!toggleResponse.ok) {
+          const errorData = await toggleResponse.json() as { error?: string };
+          return {
+            content: [{
+              type: "text",
+              text: `Error: ${errorData.error || 'Failed to update completion status'}`
+            }],
+            isError: true
+          };
+        }
+      }
 
-      updateStmt.run(completedAt, modifiedAt, params.task_id);
-
-      // Fetch the updated item
-      const updatedItem = db.prepare("SELECT * FROM items WHERE id = ?").get(params.task_id) as DirectGTDItem;
-      const formattedItem = formatItem(updatedItem);
+      // Get updated item
+      const finalResponse = await fetch(`http://localhost:9876/items/${params.task_id}`);
+      const finalData = await finalResponse.json() as { item: { id: string; title?: string; completedAt?: number | null; modifiedAt?: number } };
+      const finalItem = finalData.item;
 
       const statusText = shouldComplete ? "completed" : "uncompleted";
       const result = `# Task ${shouldComplete ? "Completed" : "Uncompleted"}
 
-**${formattedItem.title}**
+**${finalItem.title}**
 
-- **ID**: ${formattedItem.id}
+- **ID**: ${finalItem.id}
 - **Type**: Task
 - **Status**: ${shouldComplete ? "✓ Completed" : "○ Not Completed"}
-- **Modified**: ${formatDate(formattedItem.modifiedAt)}
-${formattedItem.completedAt ? `- **Completed At**: ${formatDate(formattedItem.completedAt)}` : ''}
+- **Modified**: ${finalItem.modifiedAt ? formatDate(new Date(finalItem.modifiedAt * 1000).toISOString()) : 'Now'}
+${finalItem.completedAt ? `- **Completed At**: ${formatDate(new Date(finalItem.completedAt * 1000).toISOString())}` : ''}
 
 Task successfully marked as ${statusText}.`;
 
@@ -1653,22 +1693,14 @@ Task successfully marked as ${statusText}.`;
       };
 
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [{
           type: "text",
-          text: handleDatabaseError(error)
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
-    } finally {
-      // Clean up database connection
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -1827,32 +1859,67 @@ Error Handling:
     }
   },
   async (params: { item_id: string; response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
 
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
+      // Use HTTP API to get item
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`);
 
-      if (!item) {
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const formattedItem = formatItem(item);
+      const data = await response.json() as { item: {
+        id: string;
+        title?: string;
+        parentId?: string | null;
+        sortOrder?: number;
+        createdAt?: number;
+        modifiedAt?: number;
+        completedAt?: number | null;
+        dueDate?: number | null;
+        earliestStartTime?: number | null;
+        itemType?: string;
+        notes?: string | null;
+      } };
+      const item = data.item;
+
+      // Convert API response to FormattedItem format
+      const formattedItem: FormattedItem = {
+        id: item.id,
+        title: item.title || "",
+        parentId: item.parentId || null,
+        sortOrder: item.sortOrder || 0,
+        createdAt: item.createdAt ? new Date(item.createdAt * 1000).toISOString() : "",
+        modifiedAt: item.modifiedAt ? new Date(item.modifiedAt * 1000).toISOString() : "",
+        completedAt: item.completedAt ? new Date(item.completedAt * 1000).toISOString() : null,
+        dueDate: item.dueDate ? new Date(item.dueDate * 1000).toISOString() : null,
+        earliestStartTime: item.earliestStartTime ? new Date(item.earliestStartTime * 1000).toISOString() : null,
+        notes: item.notes || null
+      };
 
       let result: string;
       if (responseFormat === ResponseFormat.MARKDOWN) {
         result = `# ${formattedItem.title}
 
 - **ID**: ${formattedItem.id}
-- **Type**: ${item.item_type}
+- **Type**: ${item.itemType || "Unknown"}
 - **Parent ID**: ${formattedItem.parentId || "None (root item)"}
 - **Sort Order**: ${formattedItem.sortOrder}
 - **Created**: ${formatDate(formattedItem.createdAt)}
@@ -1863,7 +1930,7 @@ ${formattedItem.earliestStartTime ? `- **Earliest Start**: ${formatDate(formatte
       } else {
         result = JSON.stringify({
           ...formattedItem,
-          item_type: item.item_type
+          item_type: item.itemType
         }, null, 2);
       }
 
@@ -1875,6 +1942,16 @@ ${formattedItem.earliestStartTime ? `- **Earliest Start**: ${formatDate(formatte
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -1882,14 +1959,6 @@ ${formattedItem.earliestStartTime ? `- **Earliest Start**: ${formatDate(formatte
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -1927,49 +1996,50 @@ Error Handling:
     }
   },
   async (params: { item_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
+      // Use HTTP API to delete item (proper soft-delete via app)
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`, {
+        method: 'DELETE'
+      });
 
-      // Get item before moving to show confirmation
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
+      const data = await response.json() as { deleted?: boolean; id?: string; error?: string; item?: { title?: string; id?: string; itemType?: string } };
 
-      if (!item) {
+      if (!response.ok) {
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: ${data.error || 'Failed to delete item'}`
           }],
           isError: true
         };
       }
 
-      // Find the Trash folder
-      const trashFolder = db.prepare(
-        "SELECT id FROM items WHERE LOWER(title) = 'trash' AND parent_id IS NULL"
-      ).get() as { id: string } | undefined;
+      // Get item details from database for confirmation message
+      let db: Database.Database | null = null;
+      let itemTitle = params.item_id;
+      let itemType = "Item";
 
-      if (!trashFolder) {
-        return {
-          content: [{
-            type: "text",
-            text: `Error: Trash folder not found. Please create a root-level folder named "Trash".`
-          }],
-          isError: true
-        };
+      try {
+        db = openDatabase();
+        const item = db.prepare("SELECT title, item_type FROM items WHERE id = ?").get(params.item_id) as { title: string; item_type: string } | undefined;
+        if (item) {
+          itemTitle = item.title;
+          itemType = item.item_type;
+        }
+      } catch {
+        // Ignore - use defaults
+      } finally {
+        if (db) {
+          try { db.close(); } catch { /* ignore */ }
+        }
       }
-
-      // Move item to Trash
-      const now = Math.floor(Date.now() / 1000);
-      db.prepare("UPDATE items SET parent_id = ?, modified_at = ?, needs_push = 1 WHERE id = ?").run(trashFolder.id, now, params.item_id);
 
       const result = `# Item Deleted
 
-**${item.title}**
+**${itemTitle}**
 
-- **ID**: ${item.id}
-- **Type**: ${item.item_type}
+- **ID**: ${params.item_id}
+- **Type**: ${itemType}
 
 Item moved to Trash.`;
 
@@ -1981,21 +2051,15 @@ Item moved to Trash.`;
       };
 
     } catch (error) {
+      // If API is not available, return error
+      const errorMessage = error instanceof Error ? error.message : String(error);
       return {
         content: [{
           type: "text",
-          text: handleDatabaseError(error)
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2034,61 +2098,91 @@ Error Handling:
     }
   },
   async (params: { item_id: string; new_parent_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Verify item exists
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // First get item info via API to get old parent
+      const getItemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!getItemResponse.ok) {
+        if (getItemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getItemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${getItemResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
+
+      const itemData = await getItemResponse.json() as { item: {
+        id: string;
+        title?: string;
+        parentId?: string | null;
+        itemType?: string;
+      } };
+      const item = itemData.item;
+      const oldParentId = item.parentId;
 
       // Verify new parent exists
-      const newParent = db.prepare("SELECT * FROM items WHERE id = ?").get(params.new_parent_id) as DirectGTDItem | undefined;
-      if (!newParent) {
+      const getParentResponse = await fetch(`http://localhost:9876/items/${params.new_parent_id}`);
+      if (!getParentResponse.ok) {
+        if (getParentResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No parent found with ID: ${params.new_parent_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getParentResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No parent found with ID: ${params.new_parent_id}`
+            text: `Error: API request failed (${getParentResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const oldParentId = item.parent_id;
-      const modifiedAt = Math.floor(Date.now() / 1000);
+      const parentData = await getParentResponse.json() as { item: { title?: string } };
+      const newParent = parentData.item;
 
-      // Get next sort order in new parent
-      const sortOrder = getNextSortOrder(db, params.new_parent_id);
+      // Use HTTP API to move item
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetId: params.new_parent_id })
+      });
 
-      // Move the item
-      const updateStmt = db.prepare(`
-        UPDATE items
-        SET parent_id = ?, sort_order = ?, modified_at = ?, needs_push = 1
-        WHERE id = ?
-      `);
-      updateStmt.run(params.new_parent_id, sortOrder, modifiedAt, params.item_id);
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to move item (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
 
       const result = `# Item Moved
 
-**${item.title}**
+**${item.title || "Untitled"}**
 
 - **ID**: ${item.id}
-- **Type**: ${item.item_type}
+- **Type**: ${item.itemType || "Unknown"}
 - **Old Parent**: ${oldParentId || "None (was root)"}
-- **New Parent**: ${params.new_parent_id} (${newParent.title})
-- **New Sort Order**: ${sortOrder}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
+- **New Parent**: ${params.new_parent_id} (${newParent.title || "Untitled"})
 
-Item successfully moved to "${newParent.title}".`;
+Item successfully moved to "${newParent.title || "Untitled"}".`;
 
       return {
         content: [{
@@ -2098,6 +2192,16 @@ Item successfully moved to "${newParent.title}".`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2105,14 +2209,6 @@ Item successfully moved to "${newParent.title}".`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2292,39 +2388,63 @@ Error Handling:
     }
   },
   async (params: { item_id: string; new_title: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // First get item info via API to get old title
+      const getResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!getResponse.ok) {
+        if (getResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${getResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const oldTitle = item.title;
-      const modifiedAt = Math.floor(Date.now() / 1000);
+      const itemData = await getResponse.json() as { item: {
+        id: string;
+        title?: string;
+        itemType?: string;
+      } };
+      const oldTitle = itemData.item.title;
 
-      const updateStmt = db.prepare(`
-        UPDATE items
-        SET title = ?, modified_at = ?, needs_push = 1
-        WHERE id = ?
-      `);
-      updateStmt.run(params.new_title, modifiedAt, params.item_id);
+      // Use HTTP API to update title
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: params.new_title })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to update title (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { item: { modifiedAt?: number; itemType?: string } };
 
       const result = `# Title Updated
 
-- **ID**: ${item.id}
-- **Type**: ${item.item_type}
-- **Old Title**: ${oldTitle}
+- **ID**: ${params.item_id}
+- **Type**: ${data.item.itemType || itemData.item.itemType || "Unknown"}
+- **Old Title**: ${oldTitle || "Untitled"}
 - **New Title**: ${params.new_title}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
+- **Modified**: ${data.item.modifiedAt ? formatDate(new Date(data.item.modifiedAt * 1000).toISOString()) : "Unknown"}
 
 Title successfully updated.`;
 
@@ -2336,6 +2456,16 @@ Title successfully updated.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2343,14 +2473,6 @@ Title successfully updated.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2388,49 +2510,75 @@ Error Handling:
     }
   },
   async (params: { item_id: string; due_date?: string | null }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // First get item info via API to get old due date
+      const getResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!getResponse.ok) {
+        if (getResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${getResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const oldDueDate = item.due_date;
-      const modifiedAt = Math.floor(Date.now() / 1000);
+      const itemData = await getResponse.json() as { item: {
+        id: string;
+        title?: string;
+        itemType?: string;
+        dueDate?: number | null;
+      } };
+      const oldDueDate = itemData.item.dueDate;
 
+      // Convert ISO date to Unix timestamp for API
       let newDueDateTimestamp: number | null = null;
       if (params.due_date && params.due_date !== null) {
         newDueDateTimestamp = Math.floor(new Date(params.due_date).getTime() / 1000);
       }
 
-      const updateStmt = db.prepare(`
-        UPDATE items
-        SET due_date = ?, modified_at = ?, needs_push = 1
-        WHERE id = ?
-      `);
-      updateStmt.run(newDueDateTimestamp, modifiedAt, params.item_id);
+      // Use HTTP API to update due date
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dueDate: newDueDateTimestamp })
+      });
 
-      const oldDueDateStr = oldDueDate ? formatDate(new Date(parseInt(oldDueDate) * 1000).toISOString()) : "None";
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to update due date (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { item: { modifiedAt?: number } };
+
+      const oldDueDateStr = oldDueDate ? formatDate(new Date(oldDueDate * 1000).toISOString()) : "None";
       const newDueDateStr = newDueDateTimestamp ? formatDate(new Date(newDueDateTimestamp * 1000).toISOString()) : "None";
 
       const result = `# Due Date Updated
 
-**${item.title}**
+**${itemData.item.title || "Untitled"}**
 
-- **ID**: ${item.id}
-- **Type**: ${item.item_type}
+- **ID**: ${params.item_id}
+- **Type**: ${itemData.item.itemType || "Unknown"}
 - **Old Due Date**: ${oldDueDateStr}
 - **New Due Date**: ${newDueDateStr}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
+- **Modified**: ${data.item.modifiedAt ? formatDate(new Date(data.item.modifiedAt * 1000).toISOString()) : "Unknown"}
 
 Due date successfully updated.`;
 
@@ -2442,6 +2590,16 @@ Due date successfully updated.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2449,14 +2607,6 @@ Due date successfully updated.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2494,49 +2644,75 @@ Error Handling:
     }
   },
   async (params: { item_id: string; earliest_start_time?: string | null }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // First get item info via API to get old start time
+      const getResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!getResponse.ok) {
+        if (getResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${getResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const oldStartTime = item.earliest_start_time;
-      const modifiedAt = Math.floor(Date.now() / 1000);
+      const itemData = await getResponse.json() as { item: {
+        id: string;
+        title?: string;
+        itemType?: string;
+        earliestStartTime?: number | null;
+      } };
+      const oldStartTime = itemData.item.earliestStartTime;
 
+      // Convert ISO date to Unix timestamp for API
       let newStartTimeTimestamp: number | null = null;
       if (params.earliest_start_time && params.earliest_start_time !== null) {
         newStartTimeTimestamp = Math.floor(new Date(params.earliest_start_time).getTime() / 1000);
       }
 
-      const updateStmt = db.prepare(`
-        UPDATE items
-        SET earliest_start_time = ?, modified_at = ?, needs_push = 1
-        WHERE id = ?
-      `);
-      updateStmt.run(newStartTimeTimestamp, modifiedAt, params.item_id);
+      // Use HTTP API to update earliest start time
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ earliestStartTime: newStartTimeTimestamp })
+      });
 
-      const oldStartTimeStr = oldStartTime ? formatDate(new Date(parseInt(oldStartTime) * 1000).toISOString()) : "None";
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to update earliest start time (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { item: { modifiedAt?: number } };
+
+      const oldStartTimeStr = oldStartTime ? formatDate(new Date(oldStartTime * 1000).toISOString()) : "None";
       const newStartTimeStr = newStartTimeTimestamp ? formatDate(new Date(newStartTimeTimestamp * 1000).toISOString()) : "None";
 
       const result = `# Earliest Start Time Updated
 
-**${item.title}**
+**${itemData.item.title || "Untitled"}**
 
-- **ID**: ${item.id}
-- **Type**: ${item.item_type}
+- **ID**: ${params.item_id}
+- **Type**: ${itemData.item.itemType || "Unknown"}
 - **Old Start Time**: ${oldStartTimeStr}
 - **New Start Time**: ${newStartTimeStr}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
+- **Modified**: ${data.item.modifiedAt ? formatDate(new Date(data.item.modifiedAt * 1000).toISOString()) : "Unknown"}
 
 Earliest start time successfully updated.`;
 
@@ -2548,6 +2724,16 @@ Earliest start time successfully updated.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2555,14 +2741,6 @@ Earliest start time successfully updated.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2599,14 +2777,29 @@ Error Handling:
     }
   },
   async (params: { response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
 
-      // Query all tags
-      const tags = db.prepare("SELECT * FROM tags ORDER BY name").all() as DirectGTDTag[];
+      // Use HTTP API to get all tags
+      const response = await fetch("http://localhost:9876/tags");
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: API request failed (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { tags: Array<{
+        id: string;
+        name?: string;
+        color?: string;
+      }> };
+      const tags = data.tags;
 
       let result: string;
       if (responseFormat === ResponseFormat.MARKDOWN) {
@@ -2622,7 +2815,7 @@ Error Handling:
 
           for (const tag of tags) {
             const colorIndicator = tag.color ? ` ● ${tag.color}` : "";
-            lines.push(`## ${tag.name}${colorIndicator}`);
+            lines.push(`## ${tag.name || "Unnamed"}${colorIndicator}`);
             lines.push(`- **ID**: ${tag.id}`);
             if (tag.color) {
               lines.push(`- **Color**: ${tag.color}`);
@@ -2651,6 +2844,16 @@ Error Handling:
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2658,14 +2861,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2704,72 +2899,80 @@ Error Handling:
     }
   },
   async (params: { item_id: string; tag_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Verify item exists
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
+
+      // Use HTTP API to add tag to item
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/tags`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tagId: params.tag_id })
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No tag found with ID: ${params.tag_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to add tag (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      // Verify tag exists
-      const tag = db.prepare("SELECT * FROM tags WHERE id = ?").get(params.tag_id) as DirectGTDTag | undefined;
-      if (!tag) {
-        return {
-          content: [{
-            type: "text",
-            text: `Error: No tag found with ID: ${params.tag_id}`
-          }],
-          isError: true
-        };
-      }
+      const data = await response.json() as { tag?: { name?: string; color?: string }; alreadyTagged?: boolean };
 
-      // Check if already tagged
-      const existing = db.prepare("SELECT * FROM item_tags WHERE item_id = ? AND tag_id = ?")
-        .get(params.item_id, params.tag_id);
-
-      if (existing) {
+      if (data.alreadyTagged) {
         return {
           content: [{
             type: "text",
             text: `# Tag Already Applied
 
-**${item.title}** already has tag **${tag.name}**
+**${itemData.item.title || "Untitled"}** already has tag **${data.tag?.name || "Unknown"}**
 
 No changes made.`
           }]
         };
       }
 
-      // Add the tag with CloudKit record name for sync
-      const tagNow = Math.floor(Date.now() / 1000);
-      const itemTagCkRecordName = `ItemTag_${params.item_id}_${params.tag_id}`;
-      db.prepare("INSERT INTO item_tags (item_id, tag_id, created_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, 1)")
-        .run(params.item_id, params.tag_id, tagNow, tagNow, itemTagCkRecordName);
-
-      // Update modified_at for the item
-      const modifiedAt = Math.floor(Date.now() / 1000);
-      db.prepare("UPDATE items SET modified_at = ?, needs_push = 1 WHERE id = ?")
-        .run(modifiedAt, params.item_id);
-
       const result = `# Tag Added
 
-**${item.title}**
+**${itemData.item.title || "Untitled"}**
 
-Added tag: **${tag.name}** ${tag.color ? `● ${tag.color}` : ''}
+Added tag: **${data.tag?.name || "Unknown"}** ${data.tag?.color ? `● ${data.tag.color}` : ''}
 
 - **Item ID**: ${params.item_id}
 - **Tag ID**: ${params.tag_id}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
 
 Tag successfully applied.`;
 
@@ -2781,6 +2984,16 @@ Tag successfully applied.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2788,14 +3001,6 @@ Tag successfully applied.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2834,70 +3039,61 @@ Error Handling:
     }
   },
   async (params: { item_id: string; tag_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Verify item exists
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
 
-      // Verify tag exists
-      const tag = db.prepare("SELECT * FROM tags WHERE id = ?").get(params.tag_id) as DirectGTDTag | undefined;
-      if (!tag) {
+      // Use HTTP API to remove tag from item
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/tags/${params.tag_id}`, {
+        method: "DELETE"
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Tag not found or not applied to this item`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No tag found with ID: ${params.tag_id}`
+            text: `Error: Failed to remove tag (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
-
-      // Check if tag is applied
-      const existing = db.prepare("SELECT * FROM item_tags WHERE item_id = ? AND tag_id = ?")
-        .get(params.item_id, params.tag_id);
-
-      if (!existing) {
-        return {
-          content: [{
-            type: "text",
-            text: `# Tag Not Applied
-
-**${item.title}** doesn't have tag **${tag.name}**
-
-No changes made.`
-          }]
-        };
-      }
-
-      // Remove the tag
-      db.prepare("DELETE FROM item_tags WHERE item_id = ? AND tag_id = ?")
-        .run(params.item_id, params.tag_id);
-
-      // Update modified_at for the item
-      const modifiedAt = Math.floor(Date.now() / 1000);
-      db.prepare("UPDATE items SET modified_at = ?, needs_push = 1 WHERE id = ?")
-        .run(modifiedAt, params.item_id);
 
       const result = `# Tag Removed
 
-**${item.title}**
-
-Removed tag: **${tag.name}** ${tag.color ? `● ${tag.color}` : ''}
+**${itemData.item.title || "Untitled"}**
 
 - **Item ID**: ${params.item_id}
 - **Tag ID**: ${params.tag_id}
-- **Modified**: ${formatDate(new Date(modifiedAt * 1000).toISOString())}
 
 Tag successfully removed.`;
 
@@ -2909,6 +3105,16 @@ Tag successfully removed.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -2916,14 +3122,6 @@ Tag successfully removed.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -2961,41 +3159,62 @@ Error Handling:
     }
   },
   async (params: { item_id: string; response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
 
-      // Verify item exists
-      const item = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-      if (!item) {
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: No item found with ID: ${params.item_id}`
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
+
+      // Use HTTP API to get tags for item
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/tags`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to get tags (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      // Get tags for the item
-      const tags = db.prepare(`
-        SELECT t.* FROM tags t
-        JOIN item_tags it ON t.id = it.tag_id
-        WHERE it.item_id = ?
-        ORDER BY t.name
-      `).all(params.item_id) as DirectGTDTag[];
+      const data = await response.json() as { tags: Array<{
+        id: string;
+        name?: string;
+        color?: string;
+      }> };
+      const tags = data.tags;
 
       let result: string;
       if (responseFormat === ResponseFormat.MARKDOWN) {
         if (tags.length === 0) {
-          result = `# Tags for "${item.title}"
+          result = `# Tags for "${itemData.item.title || "Untitled"}"
 
 No tags applied to this item.`;
         } else {
           const lines: string[] = [
-            `# Tags for "${item.title}"`,
+            `# Tags for "${itemData.item.title || "Untitled"}"`,
             "",
             `Item has ${tags.length} tag${tags.length === 1 ? '' : 's'}:`,
             ""
@@ -3003,7 +3222,7 @@ No tags applied to this item.`;
 
           for (const tag of tags) {
             const colorIndicator = tag.color ? ` ● ${tag.color}` : "";
-            lines.push(`- **${tag.name}**${colorIndicator}`);
+            lines.push(`- **${tag.name || "Unnamed"}**${colorIndicator}`);
           }
 
           result = lines.join("\n");
@@ -3011,7 +3230,7 @@ No tags applied to this item.`;
       } else {
         result = JSON.stringify({
           item_id: params.item_id,
-          item_title: item.title,
+          item_title: itemData.item.title,
           total: tags.length,
           tags: tags.map(tag => ({
             id: tag.id,
@@ -3029,6 +3248,16 @@ No tags applied to this item.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -3036,14 +3265,6 @@ No tags applied to this item.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -4135,51 +4356,58 @@ Error Handling:
     }
   },
   async (params: { query: string; item_type?: string; include_archive?: boolean; limit?: number; response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
       const limit = params.limit ?? 500;
       const query = params.query;
       const itemType = params.item_type;
-      const includeArchive = params.include_archive ?? false;
 
-      // Get archive IDs to exclude
-      const archiveIds = includeArchive ? new Set<string>() : getArchiveDescendantIds(db);
+      // Use HTTP API to search items
+      const response = await fetch(`http://localhost:9876/search?q=${encodeURIComponent(query)}`);
 
-      // Search with LIKE for case-insensitive matching
-      const searchPattern = `%${query}%`;
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Search failed (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
 
-      let items: { id: string; title: string }[];
+      const data = await response.json() as { items: Array<{
+        id: string;
+        title?: string;
+        itemType?: string;
+      }> };
+
+      // Apply client-side filters (item_type, limit)
+      let items = data.items;
       if (itemType) {
-        items = db.prepare(
-          "SELECT id, title FROM items WHERE title LIKE ? COLLATE NOCASE AND item_type = ? AND deleted_at IS NULL ORDER BY title ASC LIMIT ?"
-        ).all(searchPattern, itemType, limit) as { id: string; title: string }[];
-      } else {
-        items = db.prepare(
-          "SELECT id, title FROM items WHERE title LIKE ? COLLATE NOCASE AND deleted_at IS NULL ORDER BY title ASC LIMIT ?"
-        ).all(searchPattern, limit) as { id: string; title: string }[];
+        items = items.filter(item => item.itemType?.toLowerCase() === itemType.toLowerCase());
       }
+      items = items.slice(0, limit);
 
-      // Filter out archive items
-      if (archiveIds.size > 0) {
-        items = items.filter(item => !archiveIds.has(item.id));
-      }
+      // Format results
+      const formattedItems = items.map(item => ({
+        id: item.id,
+        title: item.title || "Untitled"
+      }));
 
       let result: string;
       if (responseFormat === ResponseFormat.MARKDOWN) {
-        if (items.length === 0) {
+        if (formattedItems.length === 0) {
           result = `# Search Results\n\nNo items found matching "${query}".`;
         } else {
           const lines: string[] = [
             `# Search Results`,
             "",
-            `Found ${items.length} item${items.length === 1 ? '' : 's'} matching "${query}":`,
+            `Found ${formattedItems.length} item${formattedItems.length === 1 ? '' : 's'} matching "${query}":`,
             ""
           ];
 
-          for (const item of items) {
+          for (const item of formattedItems) {
             lines.push(`- **${item.title}** (${item.id})`);
           }
 
@@ -4188,8 +4416,8 @@ Error Handling:
       } else {
         result = JSON.stringify({
           query: query,
-          total: items.length,
-          items: items
+          total: formattedItems.length,
+          items: formattedItems
         }, null, 2);
       }
 
@@ -4201,6 +4429,16 @@ Error Handling:
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -4208,14 +4446,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -4401,34 +4631,53 @@ Error Handling:
     }
   },
   async (params: { item_id: string; notes: string | null }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Check if item exists
-      const existingItem = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem | undefined;
-
-      if (!existingItem) {
+      // First get item info via API
+      const getResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!getResponse.ok) {
+        if (getResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Item with ID '${params.item_id}' not found.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await getResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: Item with ID '${params.item_id}' not found.`
+            text: `Error: API request failed (${getResponse.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const now = Math.floor(Date.now() / 1000);
+      const itemData = await getResponse.json() as { item: {
+        id: string;
+        title?: string;
+      } };
 
-      // Update the notes
-      db.prepare(
-        "UPDATE items SET notes = ?, modified_at = ?, needs_push = 1 WHERE id = ?"
-      ).run(params.notes, now, params.item_id);
+      // Use HTTP API to update notes
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: params.notes || "" })
+      });
 
-      // Get the updated item
-      const updatedItem = db.prepare("SELECT * FROM items WHERE id = ?").get(params.item_id) as DirectGTDItem;
-      const formatted = formatItem(updatedItem);
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to update notes (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as { item: { modifiedAt?: number } };
 
       const notesPreview = params.notes
         ? (params.notes.length > 100 ? params.notes.substring(0, 100) + "..." : params.notes)
@@ -4436,11 +4685,11 @@ Error Handling:
 
       const result = `# Notes Updated
 
-**${formatted.title}**
+**${itemData.item.title || "Untitled"}**
 
-- **ID**: ${formatted.id}
+- **ID**: ${params.item_id}
 - **Notes**: ${notesPreview}
-- **Modified**: ${formatDate(formatted.modifiedAt)}
+- **Modified**: ${data.item.modifiedAt ? formatDate(new Date(data.item.modifiedAt * 1000).toISOString()) : "Unknown"}
 
 Notes successfully ${params.notes ? 'updated' : 'cleared'}.`;
 
@@ -4452,6 +4701,16 @@ Notes successfully ${params.notes ? 'updated' : 'cleared'}.`;
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -4459,14 +4718,6 @@ Notes successfully ${params.notes ? 'updated' : 'cleared'}.`;
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -5326,42 +5577,69 @@ Error Handling:
     }
   },
   async (params: { item_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Check if item exists
-      const item = db.prepare("SELECT id, title FROM items WHERE id = ?").get(params.item_id) as { id: string; title: string } | undefined;
-      if (!item) {
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Item with ID '${params.item_id}' not found.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: Item with ID '${params.item_id}' not found.`
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
+
+      // Use HTTP API to start timer
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/timer/start`, {
+        method: "POST"
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to start timer (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      // Create new time entry with CloudKit record name for sync
-      const entryId = crypto.randomUUID().toUpperCase();
-      const ckRecordName = `TimeEntry_${entryId}`;
-      const now = Math.floor(Date.now() / 1000);
-
-      db.prepare(
-        "INSERT INTO time_entries (id, item_id, started_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, 1)"
-      ).run(entryId, params.item_id, now, now, ckRecordName);
-
-      const startTime = new Date(now * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
+      const data = await response.json() as { entry: { id: string; startedAt?: number } };
+      const startTime = data.entry.startedAt
+        ? new Date(data.entry.startedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })
+        : new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
 
       return {
         content: [{
           type: "text",
-          text: `# Timer Started\n\n**${item.title}**\n\n- **Entry ID**: ${entryId}\n- **Started**: ${startTime} EST\n\nTimer is now running.`
+          text: `# Timer Started\n\n**${itemData.item.title || "Untitled"}**\n\n- **Entry ID**: ${data.entry.id}\n- **Started**: ${startTime} EST\n\nTimer is now running.`
         }]
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -5369,14 +5647,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -5415,11 +5685,7 @@ Error Handling:
     }
   },
   async (params: { entry_id?: string; item_id?: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
       if (!params.entry_id && !params.item_id) {
         return {
           content: [{
@@ -5430,51 +5696,98 @@ Error Handling:
         };
       }
 
-      let entry: TimeEntry | undefined;
+      // The API uses item_id for stop - if only entry_id provided, we need to find the item
+      let itemId = params.item_id;
 
-      if (params.entry_id) {
-        entry = db.prepare(
-          "SELECT * FROM time_entries WHERE id = ? AND ended_at IS NULL"
-        ).get(params.entry_id) as TimeEntry | undefined;
-      } else if (params.item_id) {
-        entry = db.prepare(
-          "SELECT * FROM time_entries WHERE item_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1"
-        ).get(params.item_id) as TimeEntry | undefined;
-      }
-
-      if (!entry) {
+      if (!itemId && params.entry_id) {
+        // We need to get item_id from entry - but API doesn't support this directly
+        // For now, return error - entry_id not supported via API
         return {
           content: [{
             type: "text",
-            text: "Error: No active timer found."
+            text: "Error: entry_id not supported via API. Please use item_id instead."
           }],
           isError: true
         };
       }
 
-      // Get item title
-      const item = db.prepare("SELECT title FROM items WHERE id = ?").get(entry.item_id) as { title: string } | undefined;
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${itemId}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Item with ID '${itemId}' not found.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
 
-      // Stop the timer
-      const now = Math.floor(Date.now() / 1000);
-      const duration = now - entry.started_at;
+      // Use HTTP API to stop timer
+      const response = await fetch(`http://localhost:9876/items/${itemId}/timer/stop`, {
+        method: "POST"
+      });
 
-      db.prepare(
-        "UPDATE time_entries SET ended_at = ?, duration = ?, modified_at = ?, needs_push = 1 WHERE id = ?"
-      ).run(now, duration, now, entry.id);
+      if (!response.ok) {
+        if (response.status === 400) {
+          return {
+            content: [{
+              type: "text",
+              text: "Error: No active timer found."
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to stop timer (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
 
-      const startTime = new Date(entry.started_at * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
-      const endTime = new Date(now * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
-      const durationStr = formatDuration(duration);
+      const data = await response.json() as { entry: { id: string; startedAt?: number; endedAt?: number; duration?: number } };
+      const entry = data.entry;
+
+      const startTime = entry.startedAt
+        ? new Date(entry.startedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })
+        : "Unknown";
+      const endTime = entry.endedAt
+        ? new Date(entry.endedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })
+        : new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+      const durationStr = entry.duration ? formatDuration(entry.duration) : "Unknown";
 
       return {
         content: [{
           type: "text",
-          text: `# Timer Stopped\n\n**${item?.title ?? 'Unknown'}**\n\n- **Entry ID**: ${entry.id}\n- **Started**: ${startTime} EST\n- **Ended**: ${endTime} EST\n- **Duration**: ${durationStr}\n\nTimer stopped successfully.`
+          text: `# Timer Stopped\n\n**${itemData.item.title || "Untitled"}**\n\n- **Entry ID**: ${entry.id}\n- **Started**: ${startTime} EST\n- **Ended**: ${endTime} EST\n- **Duration**: ${durationStr}\n\nTimer stopped successfully.`
         }]
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -5482,14 +5795,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -5527,33 +5832,59 @@ Error Handling:
     }
   },
   async (params: { item_id: string; response_format?: ResponseFormat }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
       const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
 
-      // Check if item exists
-      const item = db.prepare("SELECT id, title FROM items WHERE id = ?").get(params.item_id) as { id: string; title: string } | undefined;
-      if (!item) {
+      // Get item info via API
+      const itemResponse = await fetch(`http://localhost:9876/items/${params.item_id}`);
+      if (!itemResponse.ok) {
+        if (itemResponse.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Item with ID '${params.item_id}' not found.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await itemResponse.text();
         return {
           content: [{
             type: "text",
-            text: `Error: Item with ID '${params.item_id}' not found.`
+            text: `Error: API request failed (${itemResponse.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+      const itemData = await itemResponse.json() as { item: { title?: string } };
+
+      // Use HTTP API to get time entries
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/time-entries`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: Failed to get time entries (${response.status}): ${errorText}`
           }],
           isError: true
         };
       }
 
-      const entries = db.prepare(
-        "SELECT * FROM time_entries WHERE item_id = ? ORDER BY started_at DESC"
-      ).all(params.item_id) as TimeEntry[];
+      const data = await response.json() as { entries: Array<{
+        id: string;
+        startedAt?: number;
+        endedAt?: number | null;
+        duration?: number | null;
+      }>; totalTime?: number };
+      const entries = data.entries;
 
       let result: string;
 
       if (responseFormat === ResponseFormat.MARKDOWN) {
         const lines: string[] = [
-          `# Time Entries for "${item.title}"`,
+          `# Time Entries for "${itemData.item.title || "Untitled"}"`,
           "",
           `Found ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}:`,
           ""
@@ -5564,36 +5895,38 @@ Error Handling:
         } else {
           let totalSeconds = 0;
           for (const entry of entries) {
-            const startTime = new Date(entry.started_at * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
-            const isRunning = entry.ended_at === null;
+            const startTime = entry.startedAt
+              ? new Date(entry.startedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })
+              : "Unknown";
+            const isRunning = entry.endedAt === null || entry.endedAt === undefined;
 
             if (isRunning) {
-              const elapsed = Math.floor(Date.now() / 1000) - entry.started_at;
+              const elapsed = entry.startedAt ? Math.floor(Date.now() / 1000) - entry.startedAt : 0;
               lines.push(`- **🔴 RUNNING** Started: ${startTime} EST (${formatDuration(elapsed)} elapsed) \`${entry.id}\``);
               totalSeconds += elapsed;
             } else {
-              const endTime = new Date(entry.ended_at! * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
-              const duration = entry.duration ?? (entry.ended_at! - entry.started_at);
+              const endTime = new Date(entry.endedAt! * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' });
+              const duration = entry.duration ?? (entry.endedAt! - (entry.startedAt || 0));
               lines.push(`- ${startTime} → ${endTime} EST (${formatDuration(duration)}) \`${entry.id}\``);
               totalSeconds += duration;
             }
           }
           lines.push("");
-          lines.push(`**Total Time**: ${formatDuration(totalSeconds)}`);
+          lines.push(`**Total Time**: ${formatDuration(data.totalTime ?? totalSeconds)}`);
         }
 
         result = lines.join("\n");
       } else {
         result = JSON.stringify({
           itemId: params.item_id,
-          itemTitle: item.title,
+          itemTitle: itemData.item.title,
           total: entries.length,
           entries: entries.map(entry => ({
             id: entry.id,
-            startedAt: new Date(entry.started_at * 1000).toISOString(),
-            endedAt: entry.ended_at ? new Date(entry.ended_at * 1000).toISOString() : null,
+            startedAt: entry.startedAt ? new Date(entry.startedAt * 1000).toISOString() : null,
+            endedAt: entry.endedAt ? new Date(entry.endedAt * 1000).toISOString() : null,
             duration: entry.duration,
-            isRunning: entry.ended_at === null
+            isRunning: entry.endedAt === null || entry.endedAt === undefined
           }))
         }, null, 2);
       }
@@ -5606,6 +5939,16 @@ Error Handling:
       };
 
     } catch (error) {
+      // Check if it's a connection error (API not running)
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the DirectGTD app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -5613,14 +5956,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -6042,45 +6377,57 @@ Error Handling:
     }
   },
   async (params: { name: string; color?: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
+      // Generate random color if not provided
+      const color = params.color ?? `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0').toUpperCase()}`;
 
-      // Check if tag already exists
-      const existing = db.prepare(
-        "SELECT id FROM tags WHERE LOWER(name) = LOWER(?)"
-      ).get(params.name) as { id: string } | undefined;
+      // Create tag via API
+      const response = await fetch("http://localhost:9876/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: params.name, color })
+      });
 
-      if (existing) {
+      if (!response.ok) {
+        if (response.status === 409) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Tag '${params.name}' already exists.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
         return {
           content: [{
             type: "text",
-            text: `Error: Tag '${params.name}' already exists.`
+            text: `Error creating tag: ${errorText}`
           }],
           isError: true
         };
       }
 
-      // Generate random color if not provided
-      const color = params.color ?? `#${Math.floor(Math.random()*16777215).toString(16).padStart(6, '0').toUpperCase()}`;
-
-      // Create tag with CloudKit record name for sync
-      const tagId = crypto.randomUUID().toUpperCase();
-      const ckRecordName = `Tag_${tagId}`;
-      const now = Math.floor(Date.now() / 1000);
-      db.prepare(
-        "INSERT INTO tags (id, name, color, created_at, modified_at, ck_record_name, needs_push) VALUES (?, ?, ?, ?, ?, ?, 1)"
-      ).run(tagId, params.name, color, now, now, ckRecordName);
+      const data = await response.json() as { tag: { id: string; name: string; color: string } };
+      const tag = data.tag;
 
       return {
         content: [{
           type: "text",
-          text: `# Tag Created\n\n**${params.name}** ● ${color}\n\n- **ID**: ${tagId}\n\nTag created successfully.`
+          text: `# Tag Created\n\n**${tag.name}** ● ${tag.color}\n\n- **ID**: ${tag.id}\n\nTag created successfully.`
         }]
       };
 
     } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -6088,14 +6435,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -6130,15 +6469,20 @@ Error Handling:
     }
   },
   async (params: { tag_id: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Check if tag exists
-      const tag = db.prepare(
-        "SELECT name, color FROM tags WHERE id = ?"
-      ).get(params.tag_id) as { name: string; color: string } | undefined;
+      // First get the tag info for display
+      const tagsResponse = await fetch("http://localhost:9876/tags");
+      if (!tagsResponse.ok) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot fetch tags from DirectGTD API."
+          }],
+          isError: true
+        };
+      }
+      const tagsData = await tagsResponse.json() as { tags: Array<{ id: string; name: string; color: string }> };
+      const tag = tagsData.tags.find(t => t.id === params.tag_id);
 
       if (!tag) {
         return {
@@ -6150,12 +6494,30 @@ Error Handling:
         };
       }
 
-      // Soft-delete tag associations first
-      const now = Math.floor(Date.now() / 1000);
-      db.prepare("UPDATE item_tags SET deleted_at = ?, modified_at = ?, needs_push = 1 WHERE tag_id = ?").run(now, now, params.tag_id);
+      // Delete via API
+      const response = await fetch(`http://localhost:9876/tags/${params.tag_id}`, {
+        method: "DELETE"
+      });
 
-      // Soft-delete the tag
-      db.prepare("UPDATE tags SET deleted_at = ?, modified_at = ?, needs_push = 1 WHERE id = ?").run(now, now, params.tag_id);
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Tag with ID '${params.tag_id}' not found.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error deleting tag: ${errorText}`
+          }],
+          isError: true
+        };
+      }
 
       return {
         content: [{
@@ -6165,6 +6527,15 @@ Error Handling:
       };
 
     } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -6172,14 +6543,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
@@ -6214,15 +6577,20 @@ Error Handling:
     }
   },
   async (params: { tag_id: string; new_name: string }) => {
-    let db: Database.Database | null = null;
-
     try {
-      db = openDatabase();
-
-      // Check if tag exists
-      const tag = db.prepare(
-        "SELECT name, color FROM tags WHERE id = ?"
-      ).get(params.tag_id) as { name: string; color: string } | undefined;
+      // First get the current tag info for display
+      const tagsResponse = await fetch("http://localhost:9876/tags");
+      if (!tagsResponse.ok) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot fetch tags from DirectGTD API."
+          }],
+          isError: true
+        };
+      }
+      const tagsData = await tagsResponse.json() as { tags: Array<{ id: string; name: string; color: string }> };
+      const tag = tagsData.tags.find(t => t.id === params.tag_id);
 
       if (!tag) {
         return {
@@ -6234,33 +6602,61 @@ Error Handling:
         };
       }
 
-      // Check if new name already exists
-      const existing = db.prepare(
-        "SELECT id FROM tags WHERE LOWER(name) = LOWER(?) AND id != ?"
-      ).get(params.new_name, params.tag_id) as { id: string } | undefined;
+      const oldName = tag.name;
 
-      if (existing) {
+      // Update via API
+      const response = await fetch(`http://localhost:9876/tags/${params.tag_id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: params.new_name })
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Tag with ID '${params.tag_id}' not found.`
+            }],
+            isError: true
+          };
+        }
+        if (response.status === 409) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: Tag '${params.new_name}' already exists.`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
         return {
           content: [{
             type: "text",
-            text: `Error: Tag '${params.new_name}' already exists.`
+            text: `Error renaming tag: ${errorText}`
           }],
           isError: true
         };
       }
 
-      // Rename tag
-      const now = Math.floor(Date.now() / 1000);
-      db.prepare("UPDATE tags SET name = ?, modified_at = ?, needs_push = 1 WHERE id = ?").run(params.new_name, now, params.tag_id);
-
       return {
         content: [{
           type: "text",
-          text: `# Tag Renamed\n\n**${tag.name}** → **${params.new_name}** ● ${tag.color}\n\n- **ID**: ${params.tag_id}\n\nTag renamed successfully.`
+          text: `# Tag Renamed\n\n**${oldName}** → **${params.new_name}** ● ${tag.color}\n\n- **ID**: ${params.tag_id}\n\nTag renamed successfully.`
         }]
       };
 
     } catch (error) {
+      if (error instanceof Error && error.message.includes('fetch')) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: Cannot connect to DirectGTD API. Make sure the app is running."
+          }],
+          isError: true
+        };
+      }
       return {
         content: [{
           type: "text",
@@ -6268,14 +6664,6 @@ Error Handling:
         }],
         isError: true
       };
-    } finally {
-      if (db) {
-        try {
-          db.close();
-        } catch {
-          // Ignore errors on close
-        }
-      }
     }
   }
 );
