@@ -139,6 +139,16 @@ const GetItemInputSchema = z.object({
     .describe("Output format: 'markdown' for human-readable or 'json' for machine-readable")
 }).strict();
 
+const GetItemPathInputSchema = z.object({
+  item_id: z.string()
+    .min(1)
+    .describe("The ID of the item to get the path for. Example: '2EADCE4C-538A-444F-BE61-B4AF0047B2EC'"),
+  response_format: z.nativeEnum(ResponseFormat)
+    .optional()
+    .default(ResponseFormat.MARKDOWN)
+    .describe("Output format: 'markdown' for human-readable or 'json' for machine-readable")
+}).strict();
+
 const UpdateTitleInputSchema = z.object({
   item_id: z.string()
     .min(1)
@@ -7000,6 +7010,110 @@ Error Handling:
         content: [{
           type: "text",
           text: `Error: Could not connect to DirectGTD API. Make sure the app is running. ${error instanceof Error ? error.message : String(error)}`
+        }],
+        isError: true
+      };
+    }
+  }
+);
+
+// Register the get_item_path tool
+server.registerTool(
+  "directgtd_get_item_path",
+  {
+    title: "Get Item Path",
+    description: `Get the full ancestor path for an item.
+
+This tool returns the complete path from root to the specified item, showing all parent folders/projects in the hierarchy.
+
+Args:
+  - item_id (string, required): The item ID. Example: '2EADCE4C-538A-444F-BE61-B4AF0047B2EC'
+  - response_format ('markdown' | 'json', optional): Output format (default: 'markdown')
+
+Returns:
+  The full path as an ordered list from root to item.
+
+Examples:
+  - Use when: "Where is this task located?"
+  - Use when: "Show me the path to this item"
+  - Use when: "What folder is this in?"
+
+Error Handling:
+  - Returns error if item_id doesn't exist`,
+    inputSchema: GetItemPathInputSchema,
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false
+    }
+  },
+  async (params: { item_id: string; response_format?: ResponseFormat }) => {
+    try {
+      const responseFormat = params.response_format ?? ResponseFormat.MARKDOWN;
+
+      // Use HTTP API to get item path
+      const response = await fetch(`http://localhost:9876/items/${params.item_id}/path`);
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          return {
+            content: [{
+              type: "text",
+              text: `Error: No item found with ID: ${params.item_id}`
+            }],
+            isError: true
+          };
+        }
+        const errorText = await response.text();
+        return {
+          content: [{
+            type: "text",
+            text: `Error: API request failed (${response.status}): ${errorText}`
+          }],
+          isError: true
+        };
+      }
+
+      const data = await response.json() as {
+        path: Array<{ id: string; title: string }>
+      };
+      const pathItems = data.path || [];
+
+      let result: string;
+      if (responseFormat === ResponseFormat.MARKDOWN) {
+        if (pathItems.length === 0) {
+          result = "Item has no path (root level item).";
+        } else {
+          const breadcrumb = pathItems.map(p => p.title).join(" > ");
+          result = `# Item Path
+
+**${breadcrumb}**
+
+## Hierarchy (${pathItems.length} levels)
+
+${pathItems.map((p, i) => `${i + 1}. **${p.title}** (${p.id})`).join("\n")}`;
+        }
+      } else {
+        result = JSON.stringify({
+          total: pathItems.length,
+          path: pathItems
+        }, null, 2);
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: result
+        }]
+      };
+
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        content: [{
+          type: "text",
+          text: `Error: Failed to connect to DirectGTD API. Make sure the app is running. Details: ${errorMessage}`
         }],
         isError: true
       };
