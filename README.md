@@ -4,7 +4,16 @@ An MCP (Model Context Protocol) server that enables LLMs to interact with Direct
 
 ## Overview
 
-This server provides 40+ tools for managing tasks, projects, tags, time tracking, and more through the MCP protocol. It integrates directly with the DirectGTD SQLite database and supports CloudKit sync compliance.
+This server provides 40+ tools for managing tasks, projects, tags, time tracking, and more through the MCP protocol. It integrates with DirectGTD and supports CloudKit sync compliance.
+
+## Important: Do Not Modify SQLite Directly
+
+**Never directly read from or write to the DirectGTD SQLite database.** All interactions must go through the API layer provided by this MCP server.
+
+Direct database access bypasses critical sync logic and can cause:
+- CloudKit sync failures
+- Data corruption
+- Lost changes on other devices
 
 ## Requirements
 
